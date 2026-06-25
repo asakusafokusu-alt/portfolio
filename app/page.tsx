@@ -39,7 +39,6 @@ const ScrollReveal = ({ children, delay = '0ms' }: ScrollRevealProps) => {
     );
 };
 
-
 // --- MAIN PAGE COMPONENT ---
 export default function Page() {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -48,11 +47,9 @@ export default function Page() {
     const [activeSection, setActiveSection] = useState(0);
     const [volume, setVolume] = useState(0.3);
     const [isPlaying, setIsPlaying] = useState(false);
-
-    // CLOSED BY DEFAULT: Toggle State initialized to false
     const [isFooterVisible, setIsFooterVisible] = useState(false);
 
-    // Particle Wind System
+    // Cosmic Fluid System with Fixed Edge-Exploding Comets
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -63,22 +60,41 @@ export default function Page() {
         let width = (canvas.width = window.innerWidth);
         let height = (canvas.height = window.innerHeight);
 
-        const mouse = { x: -1000, y: -1000, prevX: -1000, prevY: -1000, vx: 0, vy: 0, radius: 150 };
-        const particlesArray: any[] = [];
-        const numberOfParticles = 250;
+        const mouse = {
+            x: -1000, y: -1000,
+            prevX: -1000, prevY: -1000,
+            vx: 0, vy: 0,
+            smoothedVx: 0, smoothedVy: 0,
+            radius: 85
+        };
 
+        const particlesArray: Particle[] = [];
+        let activeComets: Comet[] = [];
+        let explosionFragments: Fragment[] = [];
+
+        const numberOfParticles = 1200;
+        const spawnIntervalFrames = 1800; // 30 seconds at 60fps
+
+        // --- STANDARD BACKGROUND COSMIC DUST ---
         class Particle {
-            x: number; y: number; size: number; alpha: number;
-            vx: number; vy: number; windX: number; windY: number;
+            x: number;
+            y: number;
+            vx: number;
+            vy: number;
+            size: number;
+            alpha: number;
+            baseSpeed: number;
+            angleOffset: number;
 
             constructor() {
                 this.x = Math.random() * width;
                 this.y = Math.random() * height;
-                this.size = Math.random() * 0.5 + 0.2;
+                this.vx = 0;
+                this.vy = 0;
+                this.size = Math.random() * 0.7 + 0.3;
                 this.alpha = Math.random() * 0.4 + 0.2;
-                this.vx = (Math.random() - 0.5) * 0.4;
-                this.vy = (Math.random() - 0.5) * 0.4;
-                this.windX = 0; this.windY = 0;
+                this.baseSpeed = Math.random() * 0.5 + 0.2;
+                this.angleOffset = Math.random() * Math.PI * 2;
             }
 
             draw() {
@@ -86,28 +102,36 @@ export default function Page() {
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
                 ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
-                ctx.shadowBlur = 3;
-                ctx.shadowColor = 'rgba(255, 255, 255, 0.4)';
                 ctx.fill();
-                ctx.shadowBlur = 0;
             }
 
-            update() {
-                const dx = mouse.x - this.x;
-                const dy = mouse.y - this.y;
+            update(time: number) {
+                const flowAngle = Math.sin(this.x * 0.004 + time * 0.0008) * Math.cos(this.y * 0.004 + time * 0.0008) * Math.PI * 2 + this.angleOffset;
+
+                const targetVx = Math.cos(flowAngle) * this.baseSpeed;
+                const targetVy = Math.sin(flowAngle) * this.baseSpeed;
+
+                this.vx += (targetVx - this.vx) * 0.02;
+                this.vy += (targetVy - this.vy) * 0.02;
+
+                const dx = this.x - mouse.x;
+                const dy = this.y - mouse.y;
                 const distance = Math.hypot(dx, dy);
 
                 if (distance < mouse.radius) {
                     const force = (mouse.radius - distance) / mouse.radius;
-                    const dirX = dx / distance;
-                    const dirY = dy / distance;
-                    this.windX -= (dirX * force * 2) + (mouse.vx * force * 0.2);
-                    this.windY -= (dirY * force * 2) + (mouse.vy * force * 0.2);
+                    const smoothForce = force * force;
+                    const pushAngle = Math.atan2(dy, dx);
+
+                    this.vx += Math.cos(pushAngle) * smoothForce * 4.5 + mouse.smoothedVx * smoothForce * 0.35;
+                    this.vy += Math.sin(pushAngle) * smoothForce * 4.5 + mouse.smoothedVy * smoothForce * 0.35;
                 }
 
-                this.windX *= 0.95; this.windY *= 0.95;
-                this.x += this.vx + this.windX;
-                this.y += this.vy + this.windY;
+                this.vx *= 0.94;
+                this.vy *= 0.94;
+
+                this.x += this.vx;
+                this.y += this.vy;
 
                 if (this.x < 0) this.x = width;
                 if (this.x > width) this.x = 0;
@@ -116,15 +140,182 @@ export default function Page() {
             }
         }
 
+        // --- HIGH-SPEED BLAST FRAGMENT ---
+        class Fragment {
+            x: number;
+            y: number;
+            vx: number;
+            vy: number;
+            size: number;
+            alpha: number;
+            decay: number;
+            toRemove: boolean;
+
+            constructor(x: number, y: number, cometVx: number, cometVy: number) {
+                this.x = x;
+                this.y = y;
+
+                // Creates a massive, energetic blast directed outwards away from the wall impact point
+                const baseAngle = Math.atan2(cometVy, cometVx);
+                const spreadAngle = baseAngle + (Math.random() - 0.5) * Math.PI * 1.5;
+                const blastSpeed = Math.random() * 12 + 6; // Drastically increased force to throw them to edges
+
+                this.vx = Math.cos(spreadAngle) * blastSpeed + cometVx * 0.4;
+                this.vy = Math.sin(spreadAngle) * blastSpeed + cometVy * 0.4;
+
+                this.size = Math.random() * 1.5 + 0.5; // Slightly chunkier sparks
+                this.alpha = 1.0;
+                this.decay = Math.random() * 0.02 + 0.015; // Lives slightly longer to hit far walls
+                this.toRemove = false;
+            }
+
+            draw() {
+                if (!ctx) return;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
+                ctx.fill();
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                this.vx *= 0.98; // Very low friction so they maintain crazy speeds
+                this.vy *= 0.98;
+
+                this.alpha -= this.decay;
+                if (this.alpha <= 0) {
+                    this.toRemove = true;
+                }
+            }
+        }
+
+        // --- FAST TIMED COMET ---
+        class Comet {
+            x: number = 0;
+            y: number = 0;
+            vx: number = 0;
+            vy: number = 0;
+            size: number = 0;
+            hitRadius: number = 45; // Enhanced impact radius for background dust
+            toRemove: boolean = false;
+            hasExploded: boolean = false;
+            lifeTicks: number = 0; // Tracks frames alive to prevent instant edge deaths
+
+            constructor() {
+                this.spawn();
+            }
+
+            spawn() {
+                const side = Math.floor(Math.random() * 4);
+                if (side === 0) { // Spawns Left -> Moves Right
+                    this.x = 5; this.y = Math.random() * height;
+                    this.vx = Math.random() * 5 + 8; this.vy = (Math.random() - 0.5) * 4;
+                } else if (side === 1) { // Spawns Right -> Moves Left
+                    this.x = width - 5; this.y = Math.random() * height;
+                    this.vx = -(Math.random() * 5 + 8); this.vy = (Math.random() - 0.5) * 4;
+                } else if (side === 2) { // Spawns Top -> Moves Bottom
+                    this.x = Math.random() * width; this.y = 5;
+                    this.vx = (Math.random() - 0.5) * 4; this.vy = Math.random() * 5 + 8;
+                } else { // Spawns Bottom -> Moves Top
+                    this.x = Math.random() * width; this.y = height - 5;
+                    this.vx = (Math.random() - 0.5) * 4; this.vy = -(Math.random() * 5 + 8);
+                }
+                this.size = Math.random() * 1.5 + 1.5; // Easier to see
+            }
+
+            triggerExplosion() {
+                if (this.hasExploded) return;
+                this.hasExploded = true;
+                this.toRemove = true;
+
+                // Unleash 60 lightning-fast sparks
+                for (let i = 0; i < 60; i++) {
+                    explosionFragments.push(new Fragment(this.x, this.y, this.vx, this.vy));
+                }
+            }
+
+            draw() {
+                if (!ctx) return;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 1)';
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = '#fff';
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+
+            update(targets: Particle[]) {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.lifeTicks++;
+
+                // Collide with standard dust
+                for (let i = 0; i < targets.length; i++) {
+                    const p = targets[i];
+                    const cDx = p.x - this.x;
+                    const cDy = p.y - this.y;
+                    const cDist = Math.hypot(cDx, cDy);
+
+                    if (cDist < this.hitRadius) {
+                        const collisionForce = (this.hitRadius - cDist) / this.hitRadius;
+                        p.vx += this.vx * collisionForce * 0.6;
+                        p.vy += this.vy * collisionForce * 0.6;
+                    }
+                }
+
+                // If it has been flying for more than 10 frames and touches any screen limit, boom!
+                if (this.lifeTicks > 10) {
+                    if (this.x <= 0 || this.x >= width || this.y <= 0 || this.y >= height) {
+                        this.triggerExplosion();
+                    }
+                }
+            }
+        }
+
         for (let i = 0; i < numberOfParticles; i++) particlesArray.push(new Particle());
 
+        let timeCount = 0;
         const animate = () => {
             ctx.clearRect(0, 0, width, height);
+            timeCount++;
+
+            if (timeCount % spawnIntervalFrames === 0) {
+                activeComets.push(new Comet());
+            }
+
+            mouse.smoothedVx += (mouse.vx - mouse.smoothedVx) * 0.12;
+            mouse.smoothedVy += (mouse.vy - mouse.smoothedVy) * 0.12;
+
+            // 1. Fluid Dust Layer
             for (let i = 0; i < particlesArray.length; i++) {
-                particlesArray[i].update();
+                particlesArray[i].update(timeCount);
                 particlesArray[i].draw();
             }
-            mouse.vx *= 0.8; mouse.vy *= 0.8;
+
+            // 2. High-speed Shockwave Interceptor Comets
+            for (let i = activeComets.length - 1; i >= 0; i--) {
+                activeComets[i].update(particlesArray);
+                if (!activeComets[i].toRemove) {
+                    activeComets[i].draw();
+                } else {
+                    activeComets.splice(i, 1);
+                }
+            }
+
+            // 3. Ultra-Fast Explosion Debris
+            for (let i = explosionFragments.length - 1; i >= 0; i--) {
+                explosionFragments[i].update();
+                if (!explosionFragments[i].toRemove) {
+                    explosionFragments[i].draw();
+                } else {
+                    explosionFragments.splice(i, 1);
+                }
+            }
+
+            mouse.vx *= 0.85; mouse.vy *= 0.85;
             animationFrameId = requestAnimationFrame(animate);
         };
         animate();
@@ -160,7 +351,7 @@ export default function Page() {
         };
     }, []);
 
-    // --- SAFEST COMPATIBILITY AUTOPLAY LOGIC ---
+    // --- AUTOPLAY MUSIC LOGIC ---
     useEffect(() => {
         const audio = new Audio('/audio/ausio.mp3');
         audio.loop = true;
@@ -170,13 +361,10 @@ export default function Page() {
 
         const attemptAutoplay = () => {
             if (!audioInstance.current) return;
-
-            audioInstance.current.play()
-                .then(() => {
-                    setIsPlaying(true);
-                    cleanupListeners();
-                })
-                .catch(() => {});
+            audioInstance.current.play().then(() => {
+                setIsPlaying(true);
+                cleanupListeners();
+            }).catch(() => {});
         };
 
         const cleanupListeners = () => {
@@ -195,9 +383,7 @@ export default function Page() {
 
         return () => {
             cleanupListeners();
-            if (audioInstance.current) {
-                audioInstance.current.pause();
-            }
+            if (audioInstance.current) audioInstance.current.pause();
         };
     }, []);
 
@@ -217,22 +403,14 @@ export default function Page() {
 
     const togglePlayback = () => {
         if (!audioInstance.current) return;
-
         if (isPlaying) {
             audioInstance.current.pause();
             setIsPlaying(false);
         } else {
-            audioInstance.current.play()
-                .then(() => {
-                    setIsPlaying(true);
-                })
-                .catch((err) => {
-                    console.error("Playback failed to start:", err);
-                });
+            audioInstance.current.play().then(() => setIsPlaying(true)).catch(() => {});
         }
     };
 
-    // Section Tracking for Navigation Indicators
     useEffect(() => {
         const sections = document.querySelectorAll('.snap-section');
         const observer = new IntersectionObserver(
@@ -245,7 +423,6 @@ export default function Page() {
             },
             { root: null, threshold: 0.5 }
         );
-
         sections.forEach((section) => observer.observe(section));
         return () => observer.disconnect();
     }, []);
@@ -259,22 +436,18 @@ export default function Page() {
         <div className="h-screen w-screen bg-[#0a0a0a] overflow-y-scroll snap-y snap-mandatory scroll-smooth select-none hide-scrollbar">
             <canvas ref={canvasRef} className="fixed inset-0 block pointer-events-none z-0" />
 
-            {/* --- TOP FIXED CONTAINER --- */}
+            {/* --- TOP HEADER ROW --- */}
             <div className="fixed top-0 left-0 w-full z-50 flex flex-col">
-                {/* Brutalist Utility Row with Dynamic Toggle Height */}
                 <footer
                     className={`w-full border-b-2 border-white bg-[#050505] text-white select-none font-mono tracking-widest text-[10px] md:text-xs uppercase font-bold transition-all duration-300 ease-in-out overflow-hidden ${
                         isFooterVisible ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0 pointer-events-none border-b-0'
                     }`}
                 >
                     <div className="max-w-7xl mx-auto flex flex-row divide-x-2 divide-white">
-                        {/* Box 1: Core Signature */}
                         <div className="p-3 md:p-4 flex-1 flex items-center gap-3">
                             <span className="text-white/40 hidden sm:inline">DESIGNED_BY //</span>
                             <span>RAESVET</span>
                         </div>
-
-                        {/* Box 2: System Status Index */}
                         <div className="p-3 md:p-4 flex-1 flex items-center gap-3">
                             <span className="text-white/40 hidden sm:inline">SYSTEM //</span>
                             <span className="flex items-center gap-1.5">
@@ -282,8 +455,6 @@ export default function Page() {
                                 LIVE_CORE_2026
                             </span>
                         </div>
-
-                        {/* Box 3: Terminal Block Index */}
                         <div className="p-3 md:p-4 pr-6 md:w-64 flex items-center justify-between">
                             <span className="text-white/40 hidden sm:inline">SYS_REF //</span>
                             <span>[wealthy.trade]</span>
@@ -291,74 +462,45 @@ export default function Page() {
                     </div>
                 </footer>
 
-                {/* Sub-Header Navigation */}
                 <header className="w-full px-8 py-4 flex justify-between items-center backdrop-blur-[2px] border-b border-white/5 bg-[#0a0a0a]/10">
                     <div className="flex items-center gap-4">
-                        <button
-                            onClick={() => scrollToSection(0)}
-                            className="text-white font-bold tracking-wider hover:opacity-80 transition-opacity focus:outline-none"
-                        >
+                        <button onClick={() => scrollToSection(0)} className="text-white font-bold tracking-wider hover:opacity-80 transition-opacity focus:outline-none">
                             RAESVET
                         </button>
-
-                        {/* Persistent Toggle Arrow right next to RAESVET. Starts flipped 180° pointing downward */}
                         <button
                             onClick={() => setIsFooterVisible(!isFooterVisible)}
                             className="text-white/40 hover:text-white transition-transform duration-300 ease-in-out px-1 font-sans font-normal text-sm focus:outline-none"
-                            style={{
-                                transform: isFooterVisible ? 'rotate(0deg)' : 'rotate(180deg)',
-                            }}
-                            title={isFooterVisible ? "Hide panel" : "Show panel"}
+                            style={{ transform: isFooterVisible ? 'rotate(0deg)' : 'rotate(180deg)' }}
                         >
                             ▲
                         </button>
                     </div>
 
                     <nav className="flex gap-8 text-sm tracking-widest text-white/50 font-light">
-                        <button
-                            onClick={() => scrollToSection(1)}
-                            className={`hover:text-white transition-colors ${activeSection === 1 ? 'text-white font-medium' : ''}`}
-                        >
-                            PROJECTS
-                        </button>
-                        <button
-                            onClick={() => scrollToSection(2)}
-                            className={`hover:text-white transition-colors ${activeSection === 2 ? 'text-white font-medium' : ''}`}
-                        >
-                            ABOUT
-                        </button>
-                        <button
-                            onClick={() => scrollToSection(3)}
-                            className={`hover:text-white transition-colors ${activeSection === 3 ? 'text-white font-medium' : ''}`}
-                        >
-                            CONTACT
-                        </button>
+                        <button onClick={() => scrollToSection(1)} className={`hover:text-white transition-colors ${activeSection === 1 ? 'text-white font-medium' : ''}`}>PROJECTS</button>
+                        <button onClick={() => scrollToSection(2)} className={`hover:text-white transition-colors ${activeSection === 2 ? 'text-white font-medium' : ''}`}>ABOUT</button>
+                        <button onClick={() => scrollToSection(3)} className={`hover:text-white transition-colors ${activeSection === 3 ? 'text-white font-medium' : ''}`}>CONTACT</button>
                     </nav>
                 </header>
             </div>
 
-            {/* Side Navigation Dots */}
+            {/* Side Indicators */}
             <div className="fixed right-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-50">
                 {[0, 1, 2, 3, 4].map((index) => (
                     <button
                         key={index}
                         onClick={() => scrollToSection(index)}
                         className={`w-3 h-3 rounded-full transition-all duration-300 ${
-                            activeSection === index
-                                ? 'bg-white scale-125 shadow-[0_0_8px_rgba(255,255,255,0.8)]'
-                                : 'bg-white/20 hover:bg-white/50'
+                            activeSection === index ? 'bg-white scale-125 shadow-[0_0_8px_rgba(255,255,255,0.8)]' : 'bg-white/20 hover:bg-white/50'
                         }`}
                         aria-label={`Go to section ${index + 1}`}
                     />
                 ))}
             </div>
 
-            {/* Minimalist Bottom Volume Controller */}
+            {/* Music Controls */}
             <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 px-5 py-2.5 bg-black/40 border border-white/5 rounded-full z-50 backdrop-blur-md shadow-[0_4px_30px_rgba(0,0,0,0.5)] group hover:border-white/10 transition-all duration-300">
-                <button
-                    onClick={togglePlayback}
-                    className="text-white/40 hover:text-white transition-colors text-xs tracking-widest font-light flex items-center gap-1.5 focus:outline-none"
-                >
+                <button onClick={togglePlayback} className="text-white/40 hover:text-white transition-colors text-xs tracking-widest font-light flex items-center gap-1.5 focus:outline-none">
                     <div className="flex gap-0.5 items-center h-2.5 w-3.5">
                         <span className={`w-[2px] bg-current rounded-full transition-all duration-300 ${isPlaying ? 'animate-pulse h-2.5' : 'h-1'}`} />
                         <span className={`w-[2px] bg-current rounded-full transition-all duration-300 delay-75 ${isPlaying ? 'animate-pulse h-1.5' : 'h-1'}`} />
@@ -366,137 +508,67 @@ export default function Page() {
                     </div>
                     {isPlaying ? 'SOUND ON' : 'SOUND OFF'}
                 </button>
-
                 <div className="h-3 w-[1px] bg-white/10" />
-
                 <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={volume}
-                    onChange={handleVolumeChange}
+                    type="range" min="0" max="1" step="0.01" value={volume} onChange={handleVolumeChange}
                     className="w-20 md:w-28 accent-white cursor-pointer opacity-30 group-hover:opacity-80 transition-opacity duration-300 filter drop-shadow-[0_0_4px_rgba(255,255,255,0.5)] h-1 rounded-lg"
-                    style={{
-                        background: `linear-gradient(to right, #fff ${volume * 100}%, rgba(255,255,255,0.1) ${volume * 100}%)`
-                    }}
+                    style={{ background: `linear-gradient(to right, #fff ${volume * 100}%, rgba(255,255,255,0.1) ${volume * 100}%)` }}
                 />
             </div>
 
-            {/* --- SECTION 1 --- */}
+            {/* CONTENT SECTIONS */}
             <section className="snap-section w-full h-screen flex items-center justify-center relative z-10 snap-start px-6 pt-32">
                 <ScrollReveal>
                     <div className="text-center max-w-xl">
-                        <h1
-                            className="text-6xl font-bold text-white tracking-wide mix-blend-screen mb-4"
-                            style={{ textShadow: '0 0 15px rgba(255, 255, 255, 0.3)' }}
-                        >
-                            RAESVET
-                        </h1>
-                        <p className="text-white/40 text-lg tracking-wider font-light">
-                            Soundcloud rapper
-                        </p>
+                        <h1 className="text-6xl font-bold text-white tracking-wide mix-blend-screen mb-4" style={{ textShadow: '0 0 15px rgba(255, 255, 255, 0.3)' }}>RAESVET</h1>
+                        <p className="text-white/40 text-lg tracking-wider font-light">Soundcloud rapper</p>
                     </div>
                 </ScrollReveal>
             </section>
 
-            {/* --- SECTION 2 --- */}
             <section className="snap-section w-full h-screen flex items-center justify-center relative z-10 snap-start px-6">
                 <div className="text-center max-w-xl flex flex-col gap-3">
-                    <ScrollReveal>
-                        <h2 className="text-4xl font-bold text-white tracking-wide">
-                            PROJECTS
-                        </h2>
-                    </ScrollReveal>
-                    <ScrollReveal delay="200ms">
-                        <p className="text-white/50 text-base leading-relaxed font-light">
-                            nothing much rn
-                        </p>
-                    </ScrollReveal>
+                    <ScrollReveal><h2 className="text-4xl font-bold text-white tracking-wide">PROJECTS</h2></ScrollReveal>
+                    <ScrollReveal delay="200ms"><p className="text-white/50 text-base leading-relaxed font-light">nothing much rn</p></ScrollReveal>
                 </div>
             </section>
 
-            {/* --- SECTION 3 --- */}
             <section className="snap-section w-full h-screen flex items-center justify-center relative z-10 snap-start px-6">
                 <div className="text-center max-w-xl flex flex-col gap-3">
-                    <ScrollReveal>
-                        <h2 className="text-4xl font-bold text-white tracking-wide">
-                            ABOUT ME
-                        </h2>
-                    </ScrollReveal>
-                    <ScrollReveal delay="200ms">
-                        <p className="text-white/50 text-base leading-relaxed font-light">
-                            I'm looking for a dev team like 2 people that know typescript and more to make a link in bio like guns.lol, i'm a beginner so hmu
-                        </p>
-                    </ScrollReveal>
+                    <ScrollReveal><h2 className="text-4xl font-bold text-white tracking-wide">ABOUT ME</h2></ScrollReveal>
+                    <ScrollReveal delay="200ms"><p className="text-white/50 text-base leading-relaxed font-light">I'm looking for a dev team like 2 people that know typescript and more to make a link in bio like guns.lol, i'm a beginner so hmu</p></ScrollReveal>
                 </div>
             </section>
 
-            {/* --- SECTION 4 --- */}
             <section className="snap-section w-full h-screen flex items-center justify-center relative z-10 snap-start px-6">
                 <div className="text-center max-w-xl flex flex-col gap-3">
-                    <ScrollReveal>
-                        <h2 className="text-4xl font-bold text-white tracking-wide">
-                            CONTACT
-                        </h2>
-                    </ScrollReveal>
-                    <ScrollReveal delay="200ms">
-                        <p className="text-white/50 text-base leading-relaxed font-light">
-                            discord: raesvet
-                        </p>
-                    </ScrollReveal>
+                    <ScrollReveal><h2 className="text-4xl font-bold text-white tracking-wide">CONTACT</h2></ScrollReveal>
+                    <ScrollReveal delay="200ms"><p className="text-white/50 text-base leading-relaxed font-light">discord: raesvet</p></ScrollReveal>
                 </div>
             </section>
 
-            {/* --- SECTION 5 --- */}
             <section className="snap-section w-full h-screen flex items-center justify-center relative z-10 snap-start px-6">
                 <div className="text-center max-w-xl">
                     <ScrollReveal>
-                        <p
-                            className="text-2xl md:text-4xl font-bold text-white tracking-wide select-none animate-snow-dissolve"
-                            style={{
-                                textShadow: '0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.3)',
-                                WebkitBackgroundClip: 'text',
-                                WebkitMaskImage: 'linear-gradient(to bottom, rgba(0,0,0,1) 70%, rgba(0,0,0,0.65) 85%, rgba(0,0,0,0.9) 100%)'
-                            }}
+                        <p className="text-2xl md:text-4xl font-bold text-white tracking-wide select-none animate-snow-dissolve"
+                           style={{
+                               textShadow: '0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.3)',
+                               WebkitBackgroundClip: 'text',
+                               WebkitMaskImage: 'linear-gradient(to bottom, rgba(0,0,0,1) 70%, rgba(0,0,0,0.65) 85%, rgba(0,0,0,0.9) 100%)'
+                           }}
                         >
                             There is not much to say more tbh, just hmu on dc, see ya
                         </p>
                     </ScrollReveal>
                 </div>
 
-                {/* Subtle Snow Micro-Particle Shimmer */}
                 <style jsx global>{`
                     @keyframes snowFlurry {
-                        0%, 100% {
-                            text-shadow:
-                                    0 0 10px rgba(255, 255, 255, 0.8),
-                                    0 0 20px rgba(255, 255, 255, 0.3),
-                                    1px 1px 2px rgba(255,255,255,0.2),
-                                    -1px -1px 1px rgba(255,255,255,0.1);
-                            transform: translateY(0) scale(1);
-                        }
-                        33% {
-                            text-shadow:
-                                    0 0 12px rgba(255, 255, 255, 0.85),
-                                    0 0 22px rgba(255, 255, 255, 0.35),
-                                    1.5px 2px 3px rgba(255,255,255,0.4),
-                                    -1.5px 0.5px 2px rgba(255,255,255,0.2);
-                            transform: translateY(0.2px) scale(0.998);
-                        }
-                        66% {
-                            text-shadow:
-                                    0 0 9px rgba(255, 255, 255, 0.75),
-                                    0 0 18px rgba(255, 255, 255, 0.25),
-                                    0.5px 3px 4px rgba(255,255,255,0.3),
-                                    -0.5px 1.5px 1px rgba(255,255,255,0.1);
-                            transform: translateY(0.4px) scale(1.001);
-                        }
+                        0%, 100% { transform: translateY(0) scale(1); }
+                        33% { transform: translateY(0.2px) scale(0.998); }
+                        66% { transform: translateY(0.4px) scale(1.001); }
                     }
-
-                    .animate-snow-dissolve {
-                        animation: snowFlurry 6s infinite ease-in-out;
-                    }
+                    .animate-snow-dissolve { animation: snowFlurry 6s infinite ease-in-out; }
                 `}</style>
             </section>
         </div>
